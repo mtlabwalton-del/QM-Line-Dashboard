@@ -7,42 +7,55 @@ import plotly.graph_objects as go
 st.set_page_config(page_title="Factory Dashboard", layout="wide")
 
 # =================================================================
-# CONFIG
+# CONFIG — all "Lines" (spreadsheets) and their sheet (tab) names
 # =================================================================
-LINE_SHEET_IDS = {
-    "Line 1": "1O9J1w32TjgdD9R2shkxBEoqKuEikqpFQEwEwI3rIv6c",
-    "Line 2": "1zREY-7nTb_VYCbqXWvy69Prt3g-4VhLUxv66805_loY",
-    "Line 3": "1vmJeU3BLhbDp4H_xFlZN9cTVmAnzdDlSAeJCGQdl4vs",
-}
+QC_WORKBOOK_NAME = "3.1 CS VSD 139 inline data 2026"
+QC_WORKBOOK_ID = "1DXgUsoKJdNlD6snWjUXi3X8Vn3Dn3Px_KK4Pdsr7No4"
 
-# Tab names exactly as they appear in Google Sheets (ALL CAPS "S")
-LINE_SHEET_TABS = {
-    "Line 1": ["L1S1", "L1S2", "L1S3", "L1S4"],
-    "Line 2": ["L2S1", "L2S2", "L2S3", "L2S4"],
-    "Line 3": ["L3S1", "L3S2", "L3S3", "L3S4"],
+LINES = {
+    "Line 1": {
+        "id": "1O9J1w32TjgdD9R2shkxBEoqKuEikqpFQEwEwI3rIv6c",
+        "tabs": ["L1S1", "L1S2", "L1S3", "L1S4"],
+        "type": "standard",
+    },
+    "Line 2": {
+        "id": "1zREY-7nTb_VYCbqXWvy69Prt3g-4VhLUxv66805_loY",
+        "tabs": ["L2S1", "L2S2", "L2S3", "L2S4"],
+        "type": "standard",
+    },
+    "Line 3": {
+        "id": "1vmJeU3BLhbDp4H_xFlZN9cTVmAnzdDlSAeJCGQdl4vs",
+        "tabs": ["L3S1", "L3S2", "L3S3", "L3S4"],
+        "type": "standard",
+    },
+    QC_WORKBOOK_NAME: {
+        "id": QC_WORKBOOK_ID,
+        "tabs": [
+            "OP-2", "OP-3", "OP-4", "OP-5", "OP-6",
+            "Shaft & Collar", "Pin & Ecc", "Phosphating",
+            "Sheet1", "MTTF of reamer",
+        ],
+        "type": "qc_workbook",
+    },
 }
-
-QC_SPREADSHEET_ID = "1DXgUsoKJdNlD6snWjUXi3X8Vn3Dn3Px_KK4Pdsr7No4"
-QC_SHEET_NAME = "Shaft & Collar"
 
 # Column positions (0-indexed) inside the "Shaft & Collar" tab:
 # A=0 Date (merged) | B=1 Production time | C=2 (unused) | D=3 Serial No
 # E=4 Collar thickness | F=5 Collar runout | G=6 Shaft dia (pos.1)
-# H=7 Shaft dia (pos.2) | I=8 fifth measurement (USL only)
+# H=7 Shaft dia (pos.2) | I=8 Difference between two (~60mm)
+# USL/LSL values confirmed directly from the sheet — hardcoded for reliability.
 QC_GRAPHS = [
-    {"label": "Graph 1 — Collar Thickness", "col": 4, "usl_row": 2, "lsl_row": 3, "spec_col": 4},
-    {"label": "Graph 2 — Collar Runout", "col": 5, "usl_row": 2, "lsl_row": 3, "spec_col": 5},
-    {"label": "Graph 3 — Shaft Diameter (Col. G)", "col": 6, "usl_row": 2, "lsl_row": 3, "spec_col": 6},
-    {"label": "Graph 4 — Shaft Diameter (Col. H)", "col": 7, "usl_row": 2, "lsl_row": 3, "spec_col": 6},
-    {"label": "Graph 5 — Column I Measurement", "col": 8, "usl_row": 2, "lsl_row": None, "spec_col": 8},
+    {"label": "Graph 1 — Collar Thickness", "col": 4, "usl": 7.00, "lsl": 6.80},
+    {"label": "Graph 2 — Collar Runout", "col": 5, "usl": 0.03, "lsl": 0.0},
+    {"label": "Graph 3 — Shaft Diameter (Col. G)", "col": 6, "usl": 15.9055, "lsl": 15.9005},
+    {"label": "Graph 4 — Shaft Diameter (Col. H)", "col": 7, "usl": 15.9055, "lsl": 15.9005},
+    {"label": "Graph 5 — Difference Between Two (~60 mm)", "col": 8, "usl": 0.0025, "lsl": 0.0},
 ]
-# Row 1 (index 0) = Date | Row 2 (index 1) = blank/header | Row 3 (index 2) = USL
-# Row 4 (index 3) = LSL | Row 5 (index 4) onward = data
 QC_DATA_START_ROW = 4  # 0-indexed -> Excel row 5
 
 
 # =================================================================
-# SHARED LOADERS
+# SHARED LOADER
 # =================================================================
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_sheet_csv(spreadsheet_id: str, sheet_name: str, header) -> pd.DataFrame:
@@ -55,39 +68,29 @@ def fetch_sheet_csv(spreadsheet_id: str, sheet_name: str, header) -> pd.DataFram
     return pd.read_csv(url, header=header)
 
 
-def get_spec_value(raw_df: pd.DataFrame, row_idx, col_idx: int):
-    """Safely reads a single spec (USL/LSL) cell from the raw sheet."""
-    if row_idx is None:
-        return None
-    try:
-        val = raw_df.iloc[row_idx, col_idx]
-        return float(val)
-    except Exception:
-        return None
-
-
 # =================================================================
-# SIDEBAR — top-level dashboard chooser
+# SIDEBAR — Line / Sheet selection
 # =================================================================
-st.sidebar.title("⚙️ Dashboard")
-dashboard = st.sidebar.radio(
-    "Choose a dashboard",
-    ["🏭 Production Lines", "🔧 Shaft & Collar QC"],
-)
+st.sidebar.title("⚙️ Controls")
+line = st.sidebar.selectbox("Select Line", list(LINES.keys()))
+sheet = st.sidebar.selectbox("Select Sheet", LINES[line]["tabs"])
 
 if st.sidebar.button("🔄 Refresh data now"):
     st.cache_data.clear()
 st.sidebar.caption("Data auto-refreshes from Google Sheets every 5 minutes.")
 
+st.title("📊 Factory Dashboard")
+st.subheader(f"{line} — {sheet}")
+
 
 # =================================================================
-# DASHBOARD 1 — PRODUCTION LINES (Line 1 / 2 / 3)
+# RENDER: STANDARD LINE SHEETS (Line 1 / 2 / 3 — L#S# tabs)
 # =================================================================
 def clean_line_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
     date_col = df.columns[0]
-    # Dates like "5/1/2026" or "01 May 2026" -> month/day/year (dayfirst=False)
+    # Dates like "5/1/2026" or "01 May 2026" -> month/day/year
     df[date_col] = pd.to_datetime(df[date_col], errors="coerce", dayfirst=False)
     df = df.dropna(subset=[date_col])
     for col in df.columns[1:]:
@@ -95,22 +98,14 @@ def clean_line_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def render_line_dashboard():
-    st.title("📊 Production Line Dashboard")
-
-    st.sidebar.markdown("---")
-    line = st.sidebar.selectbox("Select Line", list(LINE_SHEET_IDS.keys()))
-    sheet = st.sidebar.selectbox("Select Sheet", LINE_SHEET_TABS[line])
-
-    st.subheader(f"{line} — {sheet}")
-
+def render_standard_sheet(spreadsheet_id: str, sheet_name: str):
     try:
-        raw_df = fetch_sheet_csv(LINE_SHEET_IDS[line], sheet, header=0)
+        raw_df = fetch_sheet_csv(spreadsheet_id, sheet_name, header=0)
     except Exception as e:
         st.error(
-            f"Could not load data for **{line} / {sheet}**.\n\n"
+            f"Could not load data for **{sheet_name}**.\n\n"
             "Check that:\n"
-            "1. The tab name matches exactly (e.g. `L1S1`, capital S).\n"
+            "1. The tab name matches exactly (case-sensitive).\n"
             "2. The sheet is shared as 'Anyone with the link - Viewer'.\n\n"
             f"Technical details: {e}"
         )
@@ -127,15 +122,12 @@ def render_line_dashboard():
 
     date_col, sr_col = df.columns[0], df.columns[1]
     value_cols = list(df.columns[2:])
-
     min_date, max_date = df[date_col].min().date(), df[date_col].max().date()
 
     st.sidebar.markdown("---")
     date_range = st.sidebar.date_input(
-        "Filter by Date (Column A)",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date,
+        "Filter by Date (Column A)", value=(min_date, max_date),
+        min_value=min_date, max_value=max_date,
     )
     selected_cols = st.sidebar.multiselect("Data columns to plot", value_cols, default=value_cols)
 
@@ -159,7 +151,7 @@ def render_line_dashboard():
             plot_df = filtered.melt(id_vars=[sr_col], value_vars=selected_cols,
                                      var_name="Metric", value_name="Value")
             fig = px.line(plot_df, x=sr_col, y="Value", color="Metric", markers=True,
-                          title=f"{sheet}: Data Values vs {sr_col}")
+                          title=f"{sheet_name}: Data Values vs {sr_col}")
             fig.update_layout(xaxis_title=sr_col, yaxis_title="Value", hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
 
@@ -174,18 +166,13 @@ def render_line_dashboard():
 
     csv_bytes = filtered.to_csv(index=False).encode("utf-8")
     st.download_button("⬇️ Download filtered data as CSV", csv_bytes,
-                        file_name=f"{line.replace(' ', '_')}_{sheet}_filtered.csv", mime="text/csv")
+                        file_name=f"{line.replace(' ', '_')}_{sheet_name}_filtered.csv", mime="text/csv")
 
 
 # =================================================================
-# DASHBOARD 2 — SHAFT & COLLAR QC
+# RENDER: SHAFT & COLLAR QC TAB (5 graphs with USL/LSL)
 # =================================================================
 def build_qc_dataframe(raw_df: pd.DataFrame) -> pd.DataFrame:
-    """Builds a tidy dataframe from the raw 'Shaft & Collar' sheet:
-       - forward-fills the merged Date cells in column A
-       - keeps Production time (col B) and Serial No (col D)
-       - keeps the 5 measurement columns (E,F,G,H,I)
-    """
     raw = raw_df.copy()
     raw[0] = raw[0].ffill()  # un-merge Date column
 
@@ -202,12 +189,9 @@ def build_qc_dataframe(raw_df: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
-def render_qc_dashboard():
-    st.title("🔧 Shaft & Collar QC Dashboard")
-    st.caption("Source: 3.1 CS VSD 139 inline data 2026 — tab: 'Shaft & Collar'")
-
+def render_qc_shaft_collar(spreadsheet_id: str, sheet_name: str):
     try:
-        raw_df = fetch_sheet_csv(QC_SPREADSHEET_ID, QC_SHEET_NAME, header=None)
+        raw_df = fetch_sheet_csv(spreadsheet_id, sheet_name, header=None)
     except Exception as e:
         st.error(
             "Could not load the 'Shaft & Collar' tab.\n\n"
@@ -225,10 +209,8 @@ def render_qc_dashboard():
 
     st.sidebar.markdown("---")
     date_range = st.sidebar.date_input(
-        "Filter by Date",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date,
+        "Filter by Date", value=(min_date, max_date),
+        min_value=min_date, max_value=max_date,
     )
     graph_labels = [g["label"] for g in QC_GRAPHS]
     selected_graphs = st.sidebar.multiselect("Graphs to show", graph_labels, default=graph_labels)
@@ -247,9 +229,7 @@ def render_qc_dashboard():
         if g["label"] not in selected_graphs:
             continue
 
-        usl = get_spec_value(raw_df, g["usl_row"], g["spec_col"])
-        lsl = get_spec_value(raw_df, g["lsl_row"], g["spec_col"]) if g["lsl_row"] is not None else None
-
+        usl, lsl = g["usl"], g["lsl"]
         plot_data = filtered[["Serial", "ProdTime", "Date", g["col"]]].dropna(subset=[g["col"]])
 
         st.subheader(g["label"])
@@ -292,9 +272,40 @@ def render_qc_dashboard():
 
 
 # =================================================================
+# RENDER: OTHER QC WORKBOOK TABS (different layout — raw view for now)
+# =================================================================
+def render_generic_tab(spreadsheet_id: str, sheet_name: str):
+    try:
+        raw_df = fetch_sheet_csv(spreadsheet_id, sheet_name, header=None)
+    except Exception as e:
+        st.error(
+            f"Could not load tab **{sheet_name}**.\n\n"
+            "Check that the tab name matches exactly and the sheet is shared as "
+            f"'Anyone with the link - Viewer'.\n\nTechnical details: {e}"
+        )
+        st.stop()
+
+    st.info(
+        f"'{sheet_name}' uses a different layout (parameters listed row-by-row) than the "
+        "standard chart format. Showing the raw data below for now — let me know the exact "
+        "row/column structure if you'd like graphs built for this tab too."
+    )
+    st.dataframe(raw_df, use_container_width=True)
+
+    csv_bytes = raw_df.to_csv(index=False).encode("utf-8")
+    st.download_button("⬇️ Download raw data as CSV", csv_bytes,
+                        file_name=f"{sheet_name.replace(' ', '_')}_raw.csv", mime="text/csv")
+
+
+# =================================================================
 # ROUTING
 # =================================================================
-if dashboard == "🏭 Production Lines":
-    render_line_dashboard()
+line_type = LINES[line]["type"]
+spreadsheet_id = LINES[line]["id"]
+
+if line_type == "standard":
+    render_standard_sheet(spreadsheet_id, sheet)
+elif line_type == "qc_workbook" and sheet == "Shaft & Collar":
+    render_qc_shaft_collar(spreadsheet_id, sheet)
 else:
-    render_qc_dashboard()
+    render_generic_tab(spreadsheet_id, sheet)
